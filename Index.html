@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Milestone Dashboard</title>
+    
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            margin: 20px;
+            background-color: #f4f4f9;
+            color: #333;
+        }
+
+        h1, h2 {
+            text-align: center;
+            color: #333;
+        }
+
+        #filters-container {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            margin: 25px auto;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            max-width: 1200px;
+        }
+        
+        #reset-button {
+            padding: 8px 15px; border: 1px solid #c00; background-color: #fff; color: #c00;
+            border-radius: 4px; cursor: pointer; font-weight: bold; margin-left: 20px;
+        }
+        #reset-button:hover { background-color: #fbebeb; }
+
+        #slider-container {
+            max-width: 800px; margin: 25px auto; padding: 15px; background-color: #fff; border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; justify-content: center; align-items: center;
+        }
+
+        select { padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+        #time-slider { width: 300px; }
+        #slider-label { font-weight: bold; color: #555; margin-right: 10px; }
+
+        /* --- KEY CHANGE: Adjusted the max-height of the matrix container --- */
+        #matrix-container {
+            max-height: 55vh; /* <-- WAS 70vh, NOW SHORTER */
+            overflow: auto;
+            border: 1px solid #ddd;
+        }
+        .matrix-table {
+            border-collapse: separate;
+            border-spacing: 0;
+            background-color: #fff;
+        }
+        .matrix-table th, .matrix-table td {
+            padding: 8px;
+            border-bottom: 1px solid #eee;
+            border-right: 1px solid #eee;
+            text-align: center;
+            min-width: 85px;
+            font-size: 12px;
+        }
+        .matrix-table thead th {
+            background-color: #f7f7f7;
+            position: sticky;
+            z-index: 2;
+        }
+
+        .date-header th { top: 0; }
+        .totals-header th { top: 38px; font-size: 14px !important; color: #005a9c; }
+        
+        .sticky-col-1, .sticky-col-2, .sticky-col-3 {
+            position: sticky;
+            z-index: 1;
+            background-color: #fdfdfd;
+        }
+        .sticky-col-1 { left: 0; font-weight: bold; text-align: left; width: 300px !important; min-width: 300px !important; }
+        .sticky-col-2 { left: 300px; width: 100px !important; min-width: 100px !important; }
+        .sticky-col-3 { left: 400px; width: 120px !important; min-width: 120px !important; font-weight: bold; }
+        
+        .matrix-table thead th.sticky-col-1,
+        .matrix-table thead th.sticky-col-2,
+        .matrix-table thead th.sticky-col-3 {
+            z-index: 3;
+        }
+        
+        .milestone-cell { padding: 4px; border-radius: 4px; color: #333; font-weight: bold; }
+        .no-change { background-color: #f7f7f7; color: #777; font-weight: normal; }
+        .progressed { background-color: #26a69a; color: white; border: 1px solid #00796b; }
+
+        #composition-container { padding: 0 20px; display: flex; justify-content: center; }
+        .composition-table { border-collapse: collapse; margin-top: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); background-color: #fff; }
+        .composition-table th, .composition-table td { border: 1px solid #ddd; padding: 10px 15px; text-align: center; }
+        .composition-table th { background-color: #f7f7f7; font-weight: 600; }
+        .composition-table td:first-child, .composition-table .total-col { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Student Milestone Progress Matrix</h1>
+
+    <div id="filters-container">
+        <label>Program Type: <select id="program-type-filter"></select></label>
+        <label>District: <select id="district-filter"></select></label>
+        <label>Mandal: <select id="mandal-filter"></select></label>
+        <label>School: <select id="school-filter"></select></label>
+        <label>Language: <select id="language-filter"></select></label>
+        <button id="reset-button">Reset</button>
+    </div>
+
+    <div id="matrix-container"></div>
+
+    <hr style="margin: 40px 0; border: none; border-top: 1px solid #ddd;">
+
+    <h2>Milestone Composition by Language</h2>
+    <div id="slider-container">
+        <label for="time-slider" id="slider-label">Date:</label>
+        <input type="range" id="time-slider" name="time-slider">
+    </div>
+    
+    <div id="composition-container"></div>
+
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            Promise.all([
+                d3.csv("student_milestone_summary.csv"),
+                d3.csv("daily_milestone_composition.csv"),
+                d3.csv("student_metadata.csv")
+            ]).then(([matrixData, compositionData, metadata]) => {
+
+                const parseDate = d3.timeParse("%Y-%m-%d");
+                matrixData.forEach(d => { d.Date_Session = parseDate(d.Date_Session); });
+                compositionData.forEach(d => {
+                    d.Date_Session = parseDate(d.Date_Session);
+                    d.Student_Count = +d.Student_Count;
+                    d.Final_Milestone = +d.Final_Milestone;
+                });
+
+                const metadataMap = new Map(metadata.map(d => [d.Student_Label, d]));
+                let fullDataset = metadata;
+
+                const filters = {
+                    'Program Type': d3.select("#program-type-filter"),
+                    'District Name': d3.select("#district-filter"),
+                    'Mandal Name': d3.select("#mandal-filter"),
+                    'School Name': d3.select("#school-filter"),
+                    'Language': d3.select("#language-filter")
+                };
+
+                function populateFilters(data) {
+                    Object.keys(filters).forEach(key => {
+                        const uniqueVals = ['All', ...[...new Set(data.map(d => d[key]))].sort()];
+                        const currentVal = filters[key].property("value");
+                        filters[key].selectAll('option').data(uniqueVals).join('option').text(d => d).attr("value", d => d);
+                        if (uniqueVals.includes(currentVal)) {
+                            filters[key].property("value", currentVal);
+                        }
+                    });
+                }
+                
+                function updateCascadingFilters() {
+                    const selected = {};
+                    Object.keys(filters).forEach(key => selected[key] = filters[key].property("value"));
+                    let cascadedData = fullDataset;
+                    if (selected['District Name'] !== 'All') { cascadedData = cascadedData.filter(d => d['District Name'] === selected['District Name']); }
+                    if (selected['Mandal Name'] !== 'All') { cascadedData = cascadedData.filter(d => d['Mandal Name'] === selected['Mandal Name']); }
+                    populateFilters(cascadedData);
+                }
+
+                populateFilters(fullDataset);
+                Object.values(filters).forEach(filter => filter.on("change", () => { updateCascadingFilters(); updateVisualizations(); }));
+                d3.select("#reset-button").on("click", () => {
+                    Object.values(filters).forEach(f => f.property("value", "All"));
+                    updateCascadingFilters();
+                    updateVisualizations();
+                });
+
+                let currentSliderDate;
+                
+                function updateVisualizations() {
+                    const selectedFilters = {};
+                    Object.keys(filters).forEach(key => selectedFilters[key] = filters[key].property("value"));
+                    const filteredMetadata = metadata.filter(d => Object.keys(selectedFilters).every(key => selectedFilters[key] === 'All' || d[key] === selectedFilters[key]));
+                    const visibleStudentLabels = new Set(filteredMetadata.map(d => d.Student_Label));
+                    const filteredMatrixData = matrixData.filter(d => visibleStudentLabels.has(d.Student_Label));
+                    drawMatrix(filteredMatrixData, filteredMetadata);
+                    const allDates = [...new Set(compositionData.map(d => d.Date_Session.getTime()))].map(t => new Date(t)).sort((a,b) => a-b);
+                    setupTimeSlider(compositionData, allDates, selectedFilters);
+                }
+
+                function drawMatrix(data, currentMetadata) {
+                    const container = d3.select("#matrix-container");
+                    container.html("");
+                    if (currentMetadata.length === 0) {
+                        container.append("p").style("text-align", "center").style("padding", "20px").text("No data available for the selected filters.");
+                        return;
+                    }
+                    
+                    const dates = [...new Set(data.map(d => d.Date_Session.getTime()))].map(t => new Date(t)).sort((a, b) => a - b);
+                    const students = currentMetadata.map(d => d.Student_Label).sort();
+                    const dataByStudentAndDate = d3.group(data, d => d.Student_Label, d => d3.timeFormat("%Y-%m-%d")(d.Date_Session));
+                    const dailyTotals = d3.rollup(data, v => new Set(v.map(d => d.Student_Label)).size, d => d3.timeFormat("%Y-%m-%d")(d.Date_Session));
+
+                    const table = container.append("table").attr("class", "matrix-table");
+                    const thead = table.append("thead");
+
+                    const dateHeaderRow = thead.append("tr").attr("class", "date-header");
+                    dateHeaderRow.append("th").attr("class", "sticky-col-1").text("Student");
+                    dateHeaderRow.append("th").attr("class", "sticky-col-2").text("Total Days");
+                    dateHeaderRow.append("th").attr("class", "sticky-col-3").text("Current Milestone");
+                    dates.forEach(d => dateHeaderRow.append("th").text(d3.timeFormat("%b %d")(d)));
+                    
+                    const totalsHeaderRow = thead.append("tr").attr("class", "totals-header");
+                    totalsHeaderRow.append("th").attr("class", "sticky-col-1").text("Daily Student Total");
+                    totalsHeaderRow.append("th").attr("class", "sticky-col-2");
+                    totalsHeaderRow.append("th").attr("class", "sticky-col-3");
+                    dates.forEach(d => {
+                        const dateStr = d3.timeFormat("%Y-%m-%d")(d);
+                        totalsHeaderRow.append("th").text(dailyTotals.get(dateStr) || 0);
+                    });
+
+
+                    const tbody = table.append("tbody");
+                    students.forEach(studentLabel => {
+                        const tr = tbody.append("tr");
+                        const meta = metadataMap.get(studentLabel);
+                        
+                        tr.append("td").attr("class", "sticky-col-1").text(studentLabel);
+                        tr.append("td").attr("class", "sticky-col-2").text(meta ? meta.Total_Days_Attended : 'N/A');
+                        tr.append("td").attr("class", "sticky-col-3").text(meta ? `M${meta.Current_Milestone_Overall}` : 'N/A');
+                        
+                        dates.forEach(d => {
+                            const dateStr = d3.timeFormat("%Y-%m-%d")(d);
+                            const dayData = dataByStudentAndDate.get(studentLabel)?.get(dateStr);
+                            const td = tr.append("td");
+                            if (dayData) {
+                                const cellData = dayData[0];
+                                const cellClass = cellData.Start_Milestone < cellData.Current_Milestone ? 'progressed' : 'no-change';
+                                td.append("div")
+                                  .attr("class", `milestone-cell ${cellClass}`)
+                                  .text(cellData.Milestone_Transition);
+                            }
+                        });
+                    });
+                }
+
+                function setupTimeSlider(compData, allDates, selectedFilters) {
+                    const slider = d3.select("#time-slider");
+                    const dateStrings = allDates.map(d => d.toISOString().split('T')[0]);
+                    if (!currentSliderDate || !dateStrings.includes(currentSliderDate.toISOString().split('T')[0])) {
+                         currentSliderDate = allDates.length > 0 ? allDates[allDates.length - 1] : new Date();
+                    }
+                    slider.attr("min", 0).attr("max", allDates.length > 0 ? allDates.length - 1 : 0).attr("value", allDates.findIndex(d => d.getTime() === currentSliderDate.getTime())).on("input", function() {
+                        currentSliderDate = allDates[+this.value];
+                        updateCompositionTable(compData, currentSliderDate, selectedFilters);
+                    });
+                    updateCompositionTable(compData, currentSliderDate, selectedFilters);
+                }
+                
+                function updateCompositionTable(compData, selectedDate, selectedFilters) {
+                    const container = d3.select("#composition-container");
+                    container.html("");
+                    if (!selectedDate) { d3.select("#slider-label").text("Date: No data available"); return; }
+                    d3.select("#slider-label").text(`Date: ${d3.timeFormat("%Y-%m-%d")(selectedDate)}`);
+                    const filteredData = compData.filter(d => {
+                        const isCorrectDate = d.Date_Session.getTime() === selectedDate.getTime();
+                        if (!isCorrectDate) return false;
+                        return Object.keys(selectedFilters).every(key => selectedFilters[key] === 'All' || d[key] === selectedFilters[key]);
+                    });
+                    if (filteredData.length === 0) { container.append("p").text("No composition data for this selection and date."); return; }
+                    const languages = [...new Set(filteredData.map(d => d.Language))].sort();
+                    const milestones = [...new Set(filteredData.map(d => +d.Final_Milestone))].sort((a,b)=> a-b);
+                    const table = container.append("table").attr("class", "composition-table");
+                    const thead = table.append("thead"), tbody = table.append("tbody");
+                    const headerRow = thead.append("tr");
+                    headerRow.append("th").text("Milestone");
+                    languages.forEach(lang => headerRow.append("th").text(lang.toUpperCase()));
+                    headerRow.append("th").text("Total");
+                    milestones.forEach(mNum => {
+                        let total = 0;
+                        const row = tbody.append("tr");
+                        row.append("td").text(`M${mNum}`);
+                        languages.forEach(lang => {
+                            const matches = filteredData.filter(d => d.Final_Milestone == mNum && d.Language === lang);
+                            const count = d3.sum(matches, d => d.Student_Count);
+                            total += count;
+                            row.append("td").text(count);
+                        });
+                        row.append("td").attr("class", "total-col").text(total);
+                    });
+                }
+                
+                updateVisualizations();
+
+            }).catch(error => {
+                console.error('Error loading or processing data:', error);
+                d3.select("body").append("h2").style("color", "red").text("Error: Could not load data files. Ensure all THREE CSV files are in the same folder and you are using a local server.");
+            });
+        });
+    </script>
+</body>
+</html>
