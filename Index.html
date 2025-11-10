@@ -47,11 +47,11 @@
         #time-slider { width: 300px; }
         #slider-label { font-weight: bold; color: #555; margin-right: 10px; }
 
-        /* --- KEY CHANGE: Adjusted the max-height of the matrix container --- */
         #matrix-container {
-            max-height: 55vh; /* <-- WAS 70vh, NOW SHORTER */
+            max-height: 55vh; 
             overflow: auto;
             border: 1px solid #ddd;
+            position: relative;
         }
         .matrix-table {
             border-collapse: separate;
@@ -75,7 +75,6 @@
         .date-header th { top: 0; }
         .totals-header th { top: 38px; font-size: 14px !important; color: #005a9c; }
 
-        /* Sticky footer setup */
 tfoot {
   position: sticky;
   bottom: 0;
@@ -87,29 +86,20 @@ tfoot tr.totals-header {
   font-weight: bold;
 }
 
-/* Top footer row: Daily Student Total */
 tfoot tr.totals-header:first-child {
   position: sticky;
-  bottom: 25px; /* Slight offset to sit above the Expected row */
+  bottom: 25px;
   z-index: 4;
   background-color: #f4f8ff;
   box-shadow: 0 -2px 3px rgba(0,0,0,0.05);
 }
 
-/* Bottom footer row: Expected Students */
 tfoot tr.totals-header:last-child {
   position: sticky;
   bottom: 0;
   z-index: 5;
   background-color: #eef5ff;
   box-shadow: 0 -1px 3px rgba(0,0,0,0.05);
-}
-
-#matrix-container {
-  max-height: 55vh;
-  overflow: auto;
-  border: 1px solid #ddd;
-  position: relative;
 }
         
         .sticky-col-1, .sticky-col-2, .sticky-col-3 {
@@ -136,6 +126,20 @@ tfoot tr.totals-header:last-child {
         .composition-table th, .composition-table td { border: 1px solid #ddd; padding: 10px 15px; text-align: center; }
         .composition-table th { background-color: #f7f7f7; font-weight: 600; }
         .composition-table td:first-child, .composition-table .total-col { font-weight: bold; }
+
+        #sort-direction-btn {
+            padding: 6px 12px;
+            margin-left: 10px;
+            cursor: pointer;
+            background-color: #fff;
+            border: 1px solid #666;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        #sort-direction-btn:hover {
+            background-color: #efefef;
+        }
     </style>
 </head>
 <body>
@@ -147,7 +151,22 @@ tfoot tr.totals-header:last-child {
         <label>Mandal: <select id="mandal-filter"></select></label>
         <label>School: <select id="school-filter"></select></label>
         <label>Language: <select id="language-filter"></select></label>
+        <label>Grade: <select id="grade-filter"></select></label>
         <button id="reset-button">Reset</button>
+    </div>
+
+    <!-- sorting controls -->
+    <div style="text-align:center; margin-bottom:10px;">
+      Sort by:
+      <select id="sort-by">
+          <option value="Student_Label">Student</option>
+          <option value="Grade" selected>Grade</option>
+          <option value="Total_Days_Attended">Total Days</option>
+          <option value="Start_Milestone_Overall">Start Milestone</option>
+          <option value="Current_Milestone_Overall">Current Milestone</option>
+      </select>
+
+      <button id="sort-direction-btn">ASC</button> <!-- toggle -->
     </div>
 
     <div id="matrix-container"></div>
@@ -181,15 +200,15 @@ document.addEventListener('DOMContentLoaded', function() {
             d.Expected_Students = +d.Expected_Students || 0;
         });
 
-        const metadataMap = new Map(metadata.map(d => [d.Student_Label, d]));
-        let fullDataset = metadata;
+        let sortDirection = "ASC";  // track state
 
         const filters = {
             'Program Type': d3.select("#program-type-filter"),
             'District Name': d3.select("#district-filter"),
             'Mandal Name': d3.select("#mandal-filter"),
             'School Name': d3.select("#school-filter"),
-            'Language': d3.select("#language-filter")
+            'Language': d3.select("#language-filter"),
+            'Grade': d3.select("#grade-filter")
         };
 
         function populateFilters(data) {
@@ -206,14 +225,23 @@ document.addEventListener('DOMContentLoaded', function() {
         function updateCascadingFilters() {
             const selected = {};
             Object.keys(filters).forEach(key => selected[key] = filters[key].property("value"));
-            let cascadedData = fullDataset;
+            let cascadedData = metadata;
             if (selected['District Name'] !== 'All') { cascadedData = cascadedData.filter(d => d['District Name'] === selected['District Name']); }
             if (selected['Mandal Name'] !== 'All') { cascadedData = cascadedData.filter(d => d['Mandal Name'] === selected['Mandal Name']); }
             populateFilters(cascadedData);
         }
 
-        populateFilters(fullDataset);
+        populateFilters(metadata);
+
         Object.values(filters).forEach(filter => filter.on("change", () => { updateCascadingFilters(); updateVisualizations(); }));
+        d3.select("#sort-by").on("change", updateVisualizations);
+
+        d3.select("#sort-direction-btn").on("click", function() {
+            sortDirection = sortDirection === "ASC" ? "DESC" : "ASC";
+            this.textContent = sortDirection;
+            updateVisualizations();
+        });
+
         d3.select("#reset-button").on("click", () => {
             Object.values(filters).forEach(f => f.property("value", "All"));
             updateCascadingFilters();
@@ -234,102 +262,113 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         function drawMatrix(data, currentMetadata) {
-    const container = d3.select("#matrix-container");
-    container.html("");
-    if (currentMetadata.length === 0) {
-        container.append("p")
-            .style("text-align", "center")
-            .style("padding", "20px")
-            .text("No data available for the selected filters.");
-        return;
-    }
-
-    const dates = [...new Set(data.map(d => d.Date_Session.getTime()))]
-        .map(t => new Date(t))
-        .sort((a, b) => a - b);
-
-    const students = currentMetadata.map(d => d.Student_Label).sort();
-
-    const dataByStudentAndDate = d3.group(
-        data,
-        d => d.Student_Label,
-        d => d3.timeFormat("%Y-%m-%d")(d.Date_Session)
-    );
-
-    // Daily Student Total (unique students who appeared that day)
-    const dailyTotals = d3.rollup(
-        data,
-        v => new Set(v.map(d => d.Student_Label)).size,
-        d => d3.timeFormat("%Y-%m-%d")(d.Date_Session)
-    );
-
-    // ✅ Expected Students = unique students for the CURRENT FILTER selection
-    // Uses Student_Label which already encodes the unique student (PEN + name + language)
-    const expectedCount = new Set(currentMetadata.map(d => d.Student_Label)).size;
-
-    const table = container.append("table").attr("class", "matrix-table");
-    const thead = table.append("thead");
-    const tbody = table.append("tbody");
-
-    // --- HEADER ROW (top) ---
-    const dateHeaderRow = thead.append("tr").attr("class", "date-header");
-    dateHeaderRow.append("th").attr("class", "sticky-col-1").text("Student");
-    dateHeaderRow.append("th").attr("class", "sticky-col-2").text("Grade");
-    dateHeaderRow.append("th").attr("class", "sticky-col-3").text("Total Days");
-    dateHeaderRow.append("th").attr("class", "sticky-col-4").text("Start Milestone");
-    dateHeaderRow.append("th").attr("class", "sticky-col-5").text("Current Milestone");
-    dates.forEach(d => dateHeaderRow.append("th").text(d3.timeFormat("%b %d")(d)));
-
-    // --- BODY ROWS ---
-    const metadataMapLocal = new Map(currentMetadata.map(d => [d.Student_Label, d]));
-    students.forEach(studentLabel => {
-        const tr = tbody.append("tr");
-        const meta = metadataMapLocal.get(studentLabel);
-        tr.append("td").attr("class", "sticky-col-1").text(studentLabel);
-        tr.append("td").attr("class", "sticky-col-2").text(meta ? meta.Grade : "N/A");
-        tr.append("td").attr("class", "sticky-col-3").text(meta ? meta.Total_Days_Attended : 'N/A');
-        tr.append("td").attr("class", "sticky-col-4").text(meta ? `M${meta.Start_Milestone_Overall}` : 'N/A');
-        tr.append("td").attr("class", "sticky-col-5").text(meta ? `M${meta.Current_Milestone_Overall}` : 'N/A');
-
-        dates.forEach(d => {
-            const dateStr = d3.timeFormat("%Y-%m-%d")(d);
-            const dayData = dataByStudentAndDate.get(studentLabel)?.get(dateStr);
-            const td = tr.append("td");
-            if (dayData) {
-                const cellData = dayData[0];
-                const cellClass = cellData.Start_Milestone < cellData.Current_Milestone ? 'progressed' : 'no-change';
-                td.append("div")
-                  .attr("class", `milestone-cell ${cellClass}`)
-                  .text(cellData.Milestone_Transition);
+            const container = d3.select("#matrix-container");
+            container.html("");
+            if (currentMetadata.length === 0) {
+                container.append("p")
+                    .style("text-align", "center")
+                    .style("padding", "20px")
+                    .text("No data available for the selected filters.");
+                return;
             }
-        });
-    });
 
-    // --- FOOTER ROWS ---
-    const tfoot = table.append("tfoot");
+            const dates = [...new Set(data.map(d => d.Date_Session.getTime()))]
+                .map(t => new Date(t))
+                .sort((a, b) => a - b);
 
-    // Daily Student Total (varies by date)
-    const totalsRow = tfoot.append("tr").attr("class", "totals-header");
-    totalsRow.append("th").attr("class", "sticky-col-1").text("Daily Student Total");
-    totalsRow.append("th").attr("class", "sticky-col-2");
-    totalsRow.append("th").attr("class", "sticky-col-3");
-    totalsRow.append("th").attr("class", "sticky-col-4");
-    totalsRow.append("th").attr("class", "sticky-col-5");
-    dates.forEach(d => {
-        const dateStr = d3.timeFormat("%Y-%m-%d")(d);
-        totalsRow.append("th").text(dailyTotals.get(dateStr) || 0);
-    });
+            const sortField = d3.select("#sort-by").property("value");
 
-    // ✅ Expected Students (constant across dates for current filters)
-    const expectedRow = tfoot.append("tr").attr("class", "totals-header");
-    expectedRow.append("th").attr("class", "sticky-col-1").text("Expected Students");
-    expectedRow.append("th").attr("class", "sticky-col-2");
-    expectedRow.append("th").attr("class", "sticky-col-3");
-    expectedRow.append("th").attr("class", "sticky-col-4");
-    expectedRow.append("th").attr("class", "sticky-col-5");
-    dates.forEach(() => {
-        expectedRow.append("th").text(expectedCount);
-    });
+            let sortedMeta = [...currentMetadata];
+
+            sortedMeta.sort((a,b) => {
+
+                // Student always A-Z regardless
+                if(sortField === "Student_Label") {
+                    return d3.ascending(a.Student_Label, b.Student_Label);
+                }
+
+                // numeric sorting
+                if(sortDirection === "ASC") {
+                    return d3.ascending(+a[sortField], +b[sortField]);
+                } else {
+                    return d3.descending(+a[sortField], +b[sortField]);
+                }
+            });
+
+            const students = sortedMeta.map(d => d.Student_Label);
+
+            const dataByStudentAndDate = d3.group(
+                data,
+                d => d.Student_Label,
+                d => d3.timeFormat("%Y-%m-%d")(d.Date_Session)
+            );
+
+            const dailyTotals = d3.rollup(
+                data,
+                v => new Set(v.map(d => d.Student_Label)).size,
+                d => d3.timeFormat("%Y-%m-%d")(d.Date_Session)
+            );
+
+            const expectedCount = new Set(currentMetadata.map(d => d.Student_Label)).size;
+
+            const table = container.append("table").attr("class", "matrix-table");
+            const thead = table.append("thead");
+            const tbody = table.append("tbody");
+
+            const dateHeaderRow = thead.append("tr").attr("class", "date-header");
+            dateHeaderRow.append("th").attr("class", "sticky-col-1").text("Student");
+            dateHeaderRow.append("th").attr("class", "sticky-col-2").text("Grade");
+            dateHeaderRow.append("th").attr("class", "sticky-col-3").text("Total Days");
+            dateHeaderRow.append("th").attr("class", "sticky-col-4").text("Start Milestone");
+            dateHeaderRow.append("th").attr("class", "sticky-col-5").text("Current Milestone");
+            dates.forEach(d => dateHeaderRow.append("th").text(d3.timeFormat("%b %d")(d)));
+
+            const metadataMapLocal = new Map(currentMetadata.map(d => [d.Student_Label, d]));
+            students.forEach(studentLabel => {
+                const tr = tbody.append("tr");
+                const meta = metadataMapLocal.get(studentLabel);
+                tr.append("td").attr("class", "sticky-col-1").text(studentLabel);
+                tr.append("td").attr("class", "sticky-col-2").text(meta ? meta.Grade : "N/A");
+                tr.append("td").attr("class", "sticky-col-3").text(meta ? meta.Total_Days_Attended : 'N/A');
+                tr.append("td").attr("class", "sticky-col-4").text(meta ? `M${meta.Start_Milestone_Overall}` : 'N/A');
+                tr.append("td").attr("class", "sticky-col-5").text(meta ? `M${meta.Current_Milestone_Overall}` : 'N/A');
+
+                dates.forEach(d => {
+                    const dateStr = d3.timeFormat("%Y-%m-%d")(d);
+                    const dayData = dataByStudentAndDate.get(studentLabel)?.get(dateStr);
+                    const td = tr.append("td");
+                    if (dayData) {
+                        const cellData = dayData[0];
+                        const cellClass = cellData.Start_Milestone < cellData.Current_Milestone ? 'progressed' : 'no-change';
+                        td.append("div")
+                          .attr("class", `milestone-cell ${cellClass}`)
+                          .text(cellData.Milestone_Transition);
+                    }
+                });
+            });
+
+            const tfoot = table.append("tfoot");
+
+            const totalsRow = tfoot.append("tr").attr("class", "totals-header");
+            totalsRow.append("th").attr("class", "sticky-col-1").text("Daily Student Total");
+            totalsRow.append("th").attr("class", "sticky-col-2");
+            totalsRow.append("th").attr("class", "sticky-col-3");
+            totalsRow.append("th").attr("class", "sticky-col-4");
+            totalsRow.append("th").attr("class", "sticky-col-5");
+            dates.forEach(d => {
+                const dateStr = d3.timeFormat("%Y-%m-%d")(d);
+                totalsRow.append("th").text(dailyTotals.get(dateStr) || 0);
+            });
+
+            const expectedRow = tfoot.append("tr").attr("class", "totals-header");
+            expectedRow.append("th").attr("class", "sticky-col-1").text("Expected Students");
+            expectedRow.append("th").attr("class", "sticky-col-2");
+            expectedRow.append("th").attr("class", "sticky-col-3");
+            expectedRow.append("th").attr("class", "sticky-col-4");
+            expectedRow.append("th").attr("class", "sticky-col-5");
+            dates.forEach(() => {
+                expectedRow.append("th").text(expectedCount);
+            });
         }
 
         function setupTimeSlider(compData, allDates, selectedFilters) {
