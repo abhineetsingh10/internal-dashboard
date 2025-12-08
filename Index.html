@@ -338,12 +338,16 @@ document.addEventListener('DOMContentLoaded', function() {
                     const dayData = dataByStudentAndDate.get(studentLabel)?.get(dateStr);
                     const td = tr.append("td");
                     if (dayData) {
-                        const cellData = dayData[0];
-                        const cellClass = cellData.Start_Milestone < cellData.Current_Milestone ? 'progressed' : 'no-change';
-                        td.append("div")
-                          .attr("class", `milestone-cell ${cellClass}`)
-                          .text(cellData.Milestone_Transition);
-                    }
+    const cellData = dayData[0];
+
+    const startMil = +cellData.Start_Milestone;
+    const currentMil = +cellData.Current_Milestone;
+    const cellClass = currentMil > startMil ? 'progressed' : 'no-change';
+
+    td.append("div")
+      .attr("class", `milestone-cell ${cellClass}`)
+      .text(cellData.Milestone_Transition);
+}
                 });
             });
 
